@@ -36,6 +36,7 @@ import org.apache.cordova.LOG;
 import org.apache.cordova.PluginResult;
 import org.json.JSONArray;
 import org.json.JSONException;
+import org.json.JSONObject;
 
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
@@ -79,7 +80,7 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
     private static final String GET_PICTURE = "Get Picture";
     private static final String GET_VIDEO = "Get Video";
     private static final String GET_All = "Get All";
-    
+
     private static final String LOG_TAG = "CameraLauncher";
 
     //Where did this come from?
@@ -102,6 +103,7 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
     private MediaScannerConnection conn;    // Used to update gallery app with newly-written files
     private Uri scanMe;                     // Uri of image to be added to content store
     private Uri croppedUri;
+    private Uri outputUri;
 
     /**
      * Executes the request and returns PluginResult.
@@ -122,7 +124,7 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
             this.targetWidth = 0;
             this.encodingType = JPEG;
             this.mediaType = PICTURE;
-            this.mQuality = 80;
+            this.mQuality = 90;
 
             this.mQuality = args.getInt(0);
             destType = args.getInt(1);
@@ -144,7 +146,9 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
                 this.targetHeight = -1;
             }
 
-             try {
+            try {
+                createOutputFile(encodingType);
+
                 if (srcType == CAMERA) {
                     this.takePicture(destType, encodingType);
                 }
@@ -159,11 +163,11 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
                 callbackContext.sendPluginResult(r);
                 return true;
             }
-             
+
             PluginResult r = new PluginResult(PluginResult.Status.NO_RESULT);
             r.setKeepCallback(true);
             callbackContext.sendPluginResult(r);
-            
+
             return true;
         }
         return false;
@@ -191,6 +195,25 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
         return cache.getAbsolutePath();
     }
 
+    private void createOutputFile(int encodingType) {
+      File photo = createCaptureFile(encodingType);
+      this.outputUri = Uri.fromFile(photo);
+
+      JSONObject response;
+      try {
+          response = new JSONObject();
+          response.put("uri", this.outputUri.toString() + "?" + System.currentTimeMillis());
+          response.put("pending", true);
+      } catch (JSONException e) {
+          Log.e(LOG_TAG, "On pending result creation" + e);
+          return;
+      }
+
+      PluginResult r = new PluginResult(PluginResult.Status.OK, response);
+      r.setKeepCallback(true);
+      callbackContext.sendPluginResult(r);
+    }
+
     /**
      * Take a picture with the camera.
      * When an image is captured or the camera view is cancelled, the result is returned
@@ -211,11 +234,11 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
 
         // Let's use the intent and see what happens
         Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        intent.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, this.outputUri);
 
         // Specify file so that large image is captured and returned
-        File photo = createCaptureFile(encodingType);
-        intent.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, Uri.fromFile(photo));
-        this.imageUri = Uri.fromFile(photo);
+
+        this.imageUri = this.outputUri;
 
         if (this.cordova != null) {
             // Let's check to make sure the camera is actually installed. (Legacy Nexus 7 code)
@@ -260,13 +283,14 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
      * @param quality           Compression quality hint (0-100: 0=low quality & high compression, 100=compress of max quality)
      * @param srcType           The album to get image from.
      * @param returnType        Set the type of image to return.
-     * @param encodingType 
+     * @param encodingType
      */
     // TODO: Images selected from SDCARD don't display correctly, but from CAMERA ALBUM do!
     // TODO: Images from kitkat filechooser not going into crop function
     public void getImage(int srcType, int returnType, int encodingType) {
         Intent intent = new Intent();
         String title = GET_PICTURE;
+
         croppedUri = null;
         if (this.mediaType == PICTURE) {
             intent.setType("image/*");
@@ -283,8 +307,7 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
                     intent.putExtra("aspectX", 1);
                     intent.putExtra("aspectY", 1);
                 }
-                File photo = createCaptureFile(encodingType);
-                croppedUri = Uri.fromFile(photo);
+                croppedUri = this.outputUri;
                 intent.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, croppedUri);
             } else {
                 intent.setAction(Intent.ACTION_GET_CONTENT);
@@ -311,7 +334,7 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
 
   /**
    * Brings up the UI to perform crop on passed image URI
-   * 
+   *
    * @param picUri
    */
   private void performCrop(Uri picUri, int destType, Intent cameraIntent) {
@@ -403,7 +426,7 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
                 // Try to get the bitmap from intent.
                 bitmap = (Bitmap)intent.getExtras().get("data");
             }
-            
+
             // Double-check the bitmap.
             if (bitmap == null) {
                 Log.d(LOG_TAG, "I either have a null image path or bitmap");
@@ -436,18 +459,24 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
             }
 
             // If all this is true we shouldn't compress the image.
-            if (this.targetHeight == -1 && this.targetWidth == -1 && this.mQuality == 100 && 
+            if (this.targetHeight == -1 && this.targetWidth == -1 && this.mQuality == 100 &&
                     !this.correctOrientation) {
                 writeUncompressedImage(uri);
 
-                this.callbackContext.success(uri.toString());
+                if (this.callbackContext != null) {
+                  this.callbackContext.success(uri.toString());
+                }
             } else {
                 if(croppedUri != null) {
                     bitmap = getScaledBitmap(FileHelper.stripFileProtocol(croppedUri.toString()));
                 }
-                else
+                else if (imageUri != null)
                 {
                     bitmap = getScaledBitmap(FileHelper.stripFileProtocol(imageUri.toString()));
+                } else {
+                    File photo = createCaptureFile(JPEG);
+                    String outputUri = Uri.fromFile(photo).toString();
+                    bitmap = getScaledBitmap(FileHelper.stripFileProtocol(outputUri.toString()));
                 }
 
                 if (rotate != 0 && this.correctOrientation) {
@@ -456,7 +485,7 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
 
                 // Add compressed version of captured image to returned media store Uri
                 OutputStream os = this.cordova.getActivity().getContentResolver().openOutputStream(uri);
-                bitmap.compress(Bitmap.CompressFormat.JPEG, this.mQuality, os);
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, os);
                 os.close();
 
                 // Restore exif data to file
@@ -472,9 +501,10 @@ public class CameraLauncher extends CordovaPlugin implements MediaScannerConnect
                     refreshGallery(uri);
                 }
 
-
-                // Send Uri back to JavaScript for viewing image
-                this.callbackContext.success(uri.toString());
+                if (this.callbackContext != null) {
+                    // Send Uri back to JavaScript for viewing image
+                    this.callbackContext.success(uri.toString());
+                }
 
             }
         } else {
@@ -504,31 +534,31 @@ private void refreshGallery(Uri contentUri)
 
 
 private String ouputModifiedBitmap(Bitmap bitmap, Uri uri) throws IOException {
-        // Create an ExifHelper to save the exif data that is lost during compression
-        String modifiedPath = getTempDirectoryPath() + "/modified.jpg";
+    // Create an ExifHelper to save the exif data that is lost during compression
+    File photo = createCaptureFile(JPEG);
+    String outputUri = Uri.fromFile(photo).toString();
 
-        OutputStream os = new FileOutputStream(modifiedPath);
-        bitmap.compress(Bitmap.CompressFormat.JPEG, this.mQuality, os);
-        os.close();
-
-        // Some content: URIs do not map to file paths (e.g. picasa).
-        String realPath = FileHelper.getRealPath(uri, this.cordova);
-        ExifHelper exif = new ExifHelper();
-        if (realPath != null && this.encodingType == JPEG) {
-            try {
-                exif.createInFile(realPath);
-                exif.readExifData();
-                if (this.correctOrientation && this.orientationCorrected) {
-                    exif.resetOrientation();
-                }
-                exif.createOutFile(modifiedPath);
-                exif.writeExifData();
-            } catch (IOException e) {
-                e.printStackTrace();
+    OutputStream os = new FileOutputStream(photo);
+    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, os);
+    os.close();
+    // Some content: URIs do not map to file paths (e.g. picasa).
+    String realPath = FileHelper.getRealPath(uri, this.cordova);
+    ExifHelper exif = new ExifHelper();
+    if (realPath != null && this.encodingType == JPEG) {
+        try {
+            exif.createInFile(realPath);
+            exif.readExifData();
+            if (this.correctOrientation && this.orientationCorrected) {
+                exif.resetOrientation();
             }
+            exif.createOutFile(outputUri);
+            exif.writeExifData();
+        } catch (IOException e) {
+            e.printStackTrace();
         }
-        return modifiedPath;
     }
+    return outputUri;
+}
 
 /**
      * Applies all needed transformation to the image received from the gallery.
@@ -551,33 +581,47 @@ private String ouputModifiedBitmap(Bitmap bitmap, Uri uri) throws IOException {
         // If you ask for video or all media type you will automatically get back a file URI
         // and there will be no attempt to resize any returned data
         if (this.mediaType != PICTURE) {
-            this.callbackContext.success(uri.toString());
+            if (this.callbackContext != null) {
+                this.callbackContext.success(uri.toString());
+            }
         }
         else {
-            // This is a special case to just return the path as no scaling,
-            // rotating, nor compressing needs to be done
+            String uriString = uri.toString();
+        // This is a special case to just return the path as no scaling,
+        // rotating, nor compressing needs to be done
+            Bitmap bitmap = null;
+            try {
+                bitmap = getScaledBitmap(uriString);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            if (bitmap == null) {
+                Log.d(LOG_TAG, "I either have a null image path or bitmap");
+                this.failPicture("Unable to create bitmap!");
+                return;
+            }
+
             if (this.targetHeight == -1 && this.targetWidth == -1 &&
                     (destType == FILE_URI || destType == NATIVE_URI) && !this.correctOrientation) {
-                this.callbackContext.success(uri.toString());
+
+                try {
+                    String modifiedPath = this.ouputModifiedBitmap(bitmap, uri);
+                    // The modified image is cached by the app in order to get around this and not have to delete you
+                    // application cache I'm adding the current system time to the end of the file url.
+                    if (this.callbackContext != null) {
+                        this.callbackContext.success(modifiedPath + "?" + System.currentTimeMillis());
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    this.failPicture("Error retrieving image.");
+                }
             } else {
-                String uriString = uri.toString();
                 // Get the path to the image. Makes loading so much easier.
                 String mimeType = FileHelper.getMimeType(uriString, this.cordova);
                 // If we don't have a valid image so quit.
                 if (!("image/jpeg".equalsIgnoreCase(mimeType) || "image/png".equalsIgnoreCase(mimeType))) {
                     Log.d(LOG_TAG, "I either have a null image path or bitmap");
                     this.failPicture("Unable to retrieve path to picture!");
-                    return;
-                }
-                Bitmap bitmap = null;
-                try {
-                    bitmap = getScaledBitmap(uriString);
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-                if (bitmap == null) {
-                    Log.d(LOG_TAG, "I either have a null image path or bitmap");
-                    this.failPicture("Unable to create bitmap!");
                     return;
                 }
 
@@ -603,22 +647,19 @@ private String ouputModifiedBitmap(Bitmap bitmap, Uri uri) throws IOException {
                 // If sending filename back
                 else if (destType == FILE_URI || destType == NATIVE_URI) {
                     // Did we modify the image?
-                    if ( (this.targetHeight > 0 && this.targetWidth > 0) ||
-                            (this.correctOrientation && this.orientationCorrected) ) {
-                        try {
-                            String modifiedPath = this.ouputModifiedBitmap(bitmap, uri);
-                            // The modified image is cached by the app in order to get around this and not have to delete you
-                            // application cache I'm adding the current system time to the end of the file url.
-                            this.callbackContext.success("file://" + modifiedPath + "?" + System.currentTimeMillis());
-                        } catch (Exception e) {
-                            e.printStackTrace();
-                            this.failPicture("Error retrieving image.");
+                    try {
+                        String modifiedPath = this.ouputModifiedBitmap(bitmap, uri);
+                        // The modified image is cached by the app in order to get around this and not have to delete you
+                        // application cache I'm adding the current system time to the end of the file url.
+                        if (this.callbackContext != null) {
+                            this.callbackContext.success(modifiedPath + "?" + System.currentTimeMillis());
                         }
-                    }
-                    else {
-                        this.callbackContext.success(uri.toString());
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        this.failPicture("Error retrieving image.");
                     }
                 }
+
                 if (bitmap != null) {
                     bitmap.recycle();
                     bitmap = null;
@@ -627,7 +668,7 @@ private String ouputModifiedBitmap(Bitmap bitmap, Uri uri) throws IOException {
             }
         }
     }
-    
+
     /**
      * Called when the camera view exits.
      *
@@ -825,7 +866,7 @@ private String ouputModifiedBitmap(Bitmap bitmap, Uri uri) throws IOException {
      *
      * @param imagePath
      * @return
-     * @throws IOException 
+     * @throws IOException
      */
     private Bitmap getScaledBitmap(String imageUrl) throws IOException {
         // If no new width or height were specified return the original bitmap
@@ -863,13 +904,13 @@ private String ouputModifiedBitmap(Bitmap bitmap, Uri uri) throws IOException {
                 }
             }
         }
-        
+
         //CB-2292: WTF? Why is the width null?
         if(options.outWidth == 0 || options.outHeight == 0)
         {
             return null;
         }
-        
+
         // determine the correct aspect ratio
         int[] widthHeight = calculateAspectRatio(options.outWidth, options.outHeight);
 
@@ -983,20 +1024,24 @@ private String ouputModifiedBitmap(Bitmap bitmap, Uri uri) throws IOException {
      * @param newImage
      */
     private void cleanup(int imageType, Uri oldImage, Uri newImage, Bitmap bitmap) {
-        if (bitmap != null) {
-            bitmap.recycle();
+        try {
+          if (bitmap != null) {
+              bitmap.recycle();
+          }
+
+          // Clean up initial camera-written image file.
+          (new File(FileHelper.stripFileProtocol(oldImage.toString()))).delete();
+
+          checkForDuplicateImage(imageType);
+          // Scan for the gallery to update pic refs in gallery
+          if (this.saveToPhotoAlbum && newImage != null) {
+              this.scanForGallery(newImage);
+          }
+
+          System.gc();
+        } catch (Exception e) {
+            this.failPicture("Error cleaning up the image.");
         }
-
-        // Clean up initial camera-written image file.
-        (new File(FileHelper.stripFileProtocol(oldImage.toString()))).delete();
-
-        checkForDuplicateImage(imageType);
-        // Scan for the gallery to update pic refs in gallery
-        if (this.saveToPhotoAlbum && newImage != null) {
-            this.scanForGallery(newImage);
-        }
-
-        System.gc();
     }
 
     /**
@@ -1049,11 +1094,13 @@ private String ouputModifiedBitmap(Bitmap bitmap, Uri uri) throws IOException {
     public void processPicture(Bitmap bitmap) {
         ByteArrayOutputStream jpeg_data = new ByteArrayOutputStream();
         try {
-            if (bitmap.compress(CompressFormat.JPEG, mQuality, jpeg_data)) {
+            if (bitmap.compress(CompressFormat.JPEG, 90, jpeg_data)) {
                 byte[] code = jpeg_data.toByteArray();
                 byte[] output = Base64.encode(code, Base64.NO_WRAP);
                 String js_out = new String(output);
-                this.callbackContext.success(js_out);
+                if (this.callbackContext != null) {
+                    this.callbackContext.success(js_out);
+                }
                 js_out = null;
                 output = null;
                 code = null;
@@ -1070,7 +1117,9 @@ private String ouputModifiedBitmap(Bitmap bitmap, Uri uri) throws IOException {
      * @param err
      */
     public void failPicture(String err) {
-        this.callbackContext.error(err);
+        if (this.callbackContext != null) {
+            this.callbackContext.error(err);
+        }
     }
 
     private void scanForGallery(Uri newImage) {
